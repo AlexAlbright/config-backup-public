@@ -1,0 +1,14 @@
+.zsh
+.zshrc
+.aws/config
+.oh-my-zsh
+.ssh/config
+.tmux.conf
+.vim
+.vimrc
+.viminfo
+.vscode
+.zprofile
+.iterm2
+.iterm2_shell_integration.zsh
+.config
