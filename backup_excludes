@@ -1,0 +1,13 @@
+# rsync exclude patterns, relative to $HOME (leading / anchors to $HOME)
+.git/
+.DS_Store
+*.sock
+*.socket
+/.config/iterm2/sockets/
+/.config/iterm2/AppSupport/private/socket
+
+# reinstallable plugins and extensions
+/.vscode/extensions/
+/.vim/plugged/
+/.config/raycast/extensions/
+/.config/raycast/node-compile-cache/

@@ -1,38 +1,74 @@
 #!/opt/homebrew/bin/bash
+set -euo pipefail
+
+REPO="$(cd "$(dirname "$0")" && pwd)"
+cd "$REPO"
 
 LIST_FILE="backup_items"
+EXCLUDE_FILE="backup_excludes"
+DEST_DIR="$REPO/backup"
+LOG_FILE="$HOME/scripts/logs/create_backup.log"
+MAX_LOG_LINES=2000
 
-# Check if the list file exists
-if [ ! -f "$LIST_FILE" ]; then
-    echo "Error: List file $LIST_FILE does not exist."
+# Trim the log, then send all output to it
+if [ -f "$LOG_FILE" ] && [ "$(wc -l < "$LOG_FILE")" -gt "$MAX_LOG_LINES" ]; then
+    tail -n "$MAX_LOG_LINES" "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
+fi
+exec >> "$LOG_FILE" 2>&1
+
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*"; }
+
+for f in "$LIST_FILE" "$EXCLUDE_FILE"; do
+    if [ ! -f "$f" ]; then
+        log "Error: $f does not exist."
+        exit 1
+    fi
+done
+
+# Load file into bash array, keeping only items that exist
+readarray -t ITEMS < "$LIST_FILE"
+SOURCES=()
+for ITEM in "${ITEMS[@]}"; do
+    [ -n "$ITEM" ] || continue
+    if [ -e "$HOME/$ITEM" ]; then
+        SOURCES+=("$ITEM")
+    else
+        log "Warning: ~/$ITEM does not exist."
+    fi
+done
+
+# Mirror each item into backup/, keeping its path relative to $HOME.
+# Exit 23/24 means some files changed or vanished mid-copy; carry on.
+mkdir -p "$DEST_DIR"
+rc=0
+(cd "$HOME" && /usr/bin/rsync -rlpt --relative --delete --delete-excluded \
+    --exclude-from="$REPO/$EXCLUDE_FILE" "${SOURCES[@]}" "$DEST_DIR/") || rc=$?
+if [ "$rc" -ne 0 ] && [ "$rc" -ne 23 ] && [ "$rc" -ne 24 ]; then
+    log "Error: rsync failed with exit $rc, not committing."
     exit 1
 fi
 
-# Load file into bash array
-readarray -t ITEMS_TO_COPY < "${LIST_FILE}"
+# Refuse to commit a backup that lost any item that exists in $HOME
+for ITEM in "${SOURCES[@]}"; do
+    if [ ! -e "$DEST_DIR/$ITEM" ]; then
+        log "Error: backup/$ITEM is missing, not committing."
+        exit 1
+    fi
+done
 
-# Get the current script location
-DEST_DIR="$(pwd)/backup"
-
-# Function to copy each file or directory
-copy_files() {
-    for ITEM in "${ITEMS_TO_COPY[@]}"; do
-      if [ -e "$HOME/$ITEM" ]; then
-        cp -r "$HOME/$ITEM" "$DEST_DIR"
-            echo "Copied $HOME/$ITEM to $DEST_DIR"
-        else
-            echo "Error: $ITEM does not exist."
-        fi
-    done
-}
-
-# Call the function
-copy_files
-
-# Remove git subdirectories
-find . -mindepth 2 -type d -name ".git" -exec rm -rf {} +
-
-# commit changes to repository
+# commit changes to repository, only if something changed
 git add --all
-git commit -m "Automated config sync"
-git push origin
+if ! git diff --cached --quiet; then
+    git commit -q -m "Automated config sync"
+    log "Committed $(git rev-parse --short HEAD): $(git show --shortstat --format= HEAD | xargs)"
+fi
+
+# push anything not yet on origin, so a failed push is retried next run
+if [ -n "$(git rev-list '@{u}..HEAD')" ]; then
+    if git push -q origin; then
+        log "Pushed."
+    else
+        log "Error: push failed, will retry next run."
+        exit 1
+    fi
+fi
